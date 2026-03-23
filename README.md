@@ -96,11 +96,10 @@ Detailed instructions are in [PROJECT_GUIDE.txt](C:\Users\saias\OneDrive\Picture
 
 Cloud Run service URL:
 
-`https://adk-agent-197228016542.us-central1.run.app`
+EX-`https://adk-agent-197228016542.us-central1.run.app`
 
 Working endpoint:
-
-`https://adk-agent-197228016542.us-central1.run.app/summarize`
+EX-`https://adk-agent-197228016542.us-central1.run.app/summarize`
 
 ## Important Notes
 
