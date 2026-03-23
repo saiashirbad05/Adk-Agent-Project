@@ -1,4 +1,4 @@
-# adk-agent-project
+# ADK-AGENT-PROJECT
 
 Production-ready text summarization agent built with Google ADK and Gemini, exposed through FastAPI, containerized with Docker, stored in Artifact Registry, and deployed on Cloud Run.
 
