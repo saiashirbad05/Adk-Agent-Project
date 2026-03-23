@@ -1,0 +1,65 @@
+SERVICE SUMMARY
+adk-agent Cloud Run Deployment
+
+Cloud Run Service URL:
+https://adk-agent-197228016542.us-central1.run.app
+
+Working Public Endpoint:
+https://adk-agent-197228016542.us-central1.run.app/summarize
+
+What this endpoint does:
+- Accepts input text
+- Summarizes it using Google ADK + Gemini
+- Returns structured JSON
+
+Request format:
+{
+  "text": "Your long text here"
+}
+
+Response format:
+{
+  "original_text": "...",
+  "summary": "...",
+  "status": "success"
+}
+
+==================================================
+BEST COMMAND TO CHECK IF THE SERVICE IS RUNNING
+==================================================
+
+Run this in Cloud Shell:
+
+curl -s -X POST https://adk-agent-197228016542.us-central1.run.app/summarize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Cloud Run is a serverless platform for running containerized applications. It automatically scales and integrates with Google Cloud services."
+  }' | python -m json.tool
+
+Expected output:
+
+{
+    "original_text": "Cloud Run is a serverless platform for running containerized applications. It automatically scales and integrates with Google Cloud services.",
+    "summary": "Cloud Run is a serverless platform for containerized applications that automatically scales and integrates with Google Cloud services.",
+    "status": "success"
+}
+
+==================================================
+SHORT CHECK COMMAND
+==================================================
+
+curl -X POST https://adk-agent-197228016542.us-central1.run.app/summarize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Cloud Run is a serverless platform for running containerized applications. It automatically scales and integrates with Google Cloud services."
+  }'
+
+==================================================
+STATUS RULE
+==================================================
+
+If the output contains:
+- "summary"
+- "status": "success"
+
+then your deployed service is running correctly.

@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.db
+README.md
+PROJECT_GUIDE.txt

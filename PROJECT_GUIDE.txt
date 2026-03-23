@@ -1,0 +1,659 @@
+GOOGLE CLOUD CODELAB STYLE GUIDE
+PROJECT: adk-agent
+USE CASE: TEXT SUMMARIZATION AGENT
+RUNTIME: GOOGLE CLOUD CONSOLE + CLOUD SHELL ONLY
+
+This guide is the corrected final version based on the exact issues faced during a real deployment.
+It includes:
+- all required code
+- all required Cloud Shell commands
+- the exact working model
+- mistakes to avoid
+- failed commands to avoid repeating
+- troubleshooting for the real errors we faced
+
+====================================================================
+SECTION 1: FINAL WORKING OUTCOME
+====================================================================
+
+Goal:
+Build and deploy one AI agent named `adk-agent` that:
+- uses Google ADK
+- uses Gemini for inference
+- runs on Cloud Run
+- exposes a public HTTP endpoint
+- returns structured JSON
+
+Final endpoint behavior:
+- POST `/summarize`
+
+Request:
+{
+  "text": "Long paragraph to summarize..."
+}
+
+Response:
+{
+  "original_text": "...",
+  "summary": "...",
+  "status": "success"
+}
+
+Important naming rule:
+- Public project/service name: `adk-agent`
+- Internal ADK agent identifier: `adk_agent`
+
+Never use `adk-agent` as the internal ADK agent `name`.
+ADK requires a valid identifier, so use underscores only.
+
+====================================================================
+SECTION 2: FINAL WORKING FILES
+====================================================================
+
+Create this project structure in Cloud Shell:
+
+adk-agent-project/
+|-- adk_agent/
+|   |-- __init__.py
+|   `-- agent.py
+|-- main.py
+|-- requirements.txt
+|-- Dockerfile
+`-- .dockerignore
+
+====================================================================
+SECTION 3: FINAL WORKING CODE
+====================================================================
+
+Create `adk_agent/__init__.py`
+
+from . import agent
+
+
+Create `adk_agent/agent.py`
+
+from google.adk.agents import LlmAgent
+
+
+root_agent = LlmAgent(
+    name="adk_agent",
+    model="gemini-2.5-flash",
+    description="A text summarization agent built with Google ADK and Gemini.",
+    instruction=(
+        "You are adk-agent, a production-style text summarization assistant. "
+        "Summarize the user's input clearly and faithfully. "
+        "Preserve the core meaning, remove repetition, and keep the response concise. "
+        "Return only the summary text, with no preamble and no bullet points."
+    ),
+)
+
+
+Create `main.py`
+
+import os
+import uuid
+from contextlib import asynccontextmanager
+from typing import Literal
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai.types import Content, Part
+
+from adk_agent.agent import root_agent
+
+
+APP_NAME = "adk_agent"
+USER_ID = "cloud-run-user"
+
+
+class SummarizeRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="Text to summarize.")
+
+
+class SummarizeResponse(BaseModel):
+    original_text: str
+    summary: str
+    status: Literal["success"]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=root_agent,
+        app_name=APP_NAME,
+        session_service=session_service,
+    )
+    app.state.session_service = session_service
+    app.state.runner = runner
+    yield
+
+
+app = FastAPI(
+    title="adk-agent",
+    version="1.0.0",
+    description="Production-ready text summarization agent using Google ADK and Gemini.",
+    lifespan=lifespan,
+)
+
+
+@app.get("/")
+async def root():
+    return {
+        "service": "adk-agent",
+        "status": "ok",
+        "message": "Use POST /summarize to summarize text."
+    }
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
+
+
+@app.post("/summarize", response_model=SummarizeResponse)
+async def summarize(payload: SummarizeRequest):
+    try:
+        text = payload.text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="The 'text' field must not be empty.")
+
+        session_id = str(uuid.uuid4())
+        session_service = app.state.session_service
+        runner = app.state.runner
+
+        await session_service.create_session(
+            app_name=APP_NAME,
+            user_id=USER_ID,
+            session_id=session_id,
+        )
+
+        message = Content(role="user", parts=[Part(text=text)])
+        summary = ""
+
+        async for event in runner.run_async(
+            user_id=USER_ID,
+            session_id=session_id,
+            new_message=message,
+        ):
+            if event.is_final_response() and event.content and event.content.parts:
+                parts = [part.text for part in event.content.parts if getattr(part, "text", None)]
+                summary = " ".join(parts).strip()
+
+        if not summary:
+            raise HTTPException(status_code=502, detail="The agent returned an empty summary.")
+
+        return SummarizeResponse(
+            original_text=text,
+            summary=summary,
+            status="success",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("ERROR IN /summarize:", repr(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("PORT", "8080"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+
+
+Create `requirements.txt`
+
+fastapi>=0.115.0,<1.0.0
+uvicorn[standard]>=0.30.0,<1.0.0
+google-adk>=1.19.0,<2.0.0
+
+
+Create `Dockerfile`
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+COPY adk_agent ./adk_agent
+COPY main.py .
+
+EXPOSE 8080
+
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+
+
+Create `.dockerignore`
+
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.db
+README.md
+PROJECT_GUIDE.txt
+PROJECT_GUIDE.html
+PROJECT_GUIDE.pdf
+
+====================================================================
+SECTION 4: SETUP COMMANDS IN CLOUD SHELL
+====================================================================
+
+1. Set your project:
+
+gcloud config set project YOUR_GCP_PROJECT_ID
+
+2. Enable APIs:
+
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com secretmanager.googleapis.com
+
+3. Create project folder:
+
+mkdir -p ~/adk-agent-project/adk_agent
+cd ~/adk-agent-project
+
+====================================================================
+SECTION 5: INSTALL AND LOCAL TEST
+====================================================================
+
+Create venv and install:
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install --no-cache-dir -r requirements.txt
+
+Set Gemini key:
+
+export GOOGLE_API_KEY="YOUR_REAL_GEMINI_API_KEY"
+
+Check key exists:
+
+echo "${GOOGLE_API_KEY:0:8}"
+
+Start local app:
+
+uvicorn main:app --host 0.0.0.0 --port 8080 --log-level debug
+
+Test local health:
+
+curl http://127.0.0.1:8080/healthz
+
+Test local summarize:
+
+curl -X POST http://127.0.0.1:8080/summarize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Cloud Run is a serverless platform for running containerized applications. It automatically scales and integrates with Google Cloud services."
+  }'
+
+====================================================================
+SECTION 6: ARTIFACT REGISTRY AND BUILD
+====================================================================
+
+Create repository:
+
+gcloud artifacts repositories create adk-agent-repo \
+  --repository-format=docker \
+  --location=us-central1 \
+  --description="Docker repository for adk-agent"
+
+Important:
+- If repository already exists, this command may fail.
+- That is okay. Just continue.
+
+Create image tag:
+
+export PROJECT_ID="$(gcloud config get-value project)"
+export IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/adk-agent-repo/adk-agent:$(date +%Y%m%d-%H%M%S)"
+echo "$IMAGE_URI"
+
+Build and push:
+
+gcloud builds submit --tag "$IMAGE_URI"
+
+Important:
+- Use a fresh timestamp tag.
+- Do not keep reusing `:latest` if deployment looks stale.
+
+====================================================================
+SECTION 7: SECRET MANAGER
+====================================================================
+
+Create or update secret:
+
+echo -n "$GOOGLE_API_KEY" | gcloud secrets create GOOGLE_API_KEY --data-file=- || \
+echo -n "$GOOGLE_API_KEY" | gcloud secrets versions add GOOGLE_API_KEY --data-file=-
+
+Get project number:
+
+gcloud projects describe "$(gcloud config get-value project)" --format="value(projectNumber)"
+
+Grant Cloud Run access:
+
+gcloud secrets add-iam-policy-binding GOOGLE_API_KEY \
+  --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+Replace:
+- PROJECT_NUMBER
+
+====================================================================
+SECTION 8: DEPLOY TO CLOUD RUN
+====================================================================
+
+If you previously set GOOGLE_API_KEY as a plain env var in Cloud Run, remove it first:
+
+gcloud run services update adk-agent \
+  --region us-central1 \
+  --remove-env-vars GOOGLE_API_KEY
+
+Then deploy:
+
+gcloud run deploy adk-agent \
+  --image "$IMAGE_URI" \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --port 8080 \
+  --set-secrets GOOGLE_API_KEY=GOOGLE_API_KEY:latest
+
+Get service URL:
+
+gcloud run services describe adk-agent \
+  --region us-central1 \
+  --format="value(status.url)"
+
+====================================================================
+SECTION 9: FINAL TEST COMMANDS
+====================================================================
+
+Set URL:
+
+export APP_URL="$(gcloud run services describe adk-agent --region us-central1 --format='value(status.url)')"
+echo "$APP_URL"
+
+Test root:
+
+curl -i "$APP_URL/"
+
+Test health:
+
+curl -i "$APP_URL/healthz"
+
+Test summarize:
+
+curl -i -X POST "$APP_URL/summarize" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Cloud Run is a serverless platform for running containerized applications. It automatically scales and integrates with Google Cloud services."
+  }'
+
+Pretty print response:
+
+curl -s -X POST "$APP_URL/summarize" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Cloud Run is a serverless platform for running containerized applications. It automatically scales and integrates with Google Cloud services."
+  }' | python -m json.tool
+
+====================================================================
+SECTION 10: REAL ERRORS FACED AND HOW TO FIX THEM
+====================================================================
+
+ERROR 1: No space left on device during pip install
+
+Error:
+- `Could not install packages due to an OSError: [Errno 28] No space left on device`
+
+Fix:
+
+rm -rf ~/.cache/pip
+rm -rf ~/.cache
+rm -rf ~/adk-agent-project/.venv
+docker system prune -af || true
+
+Then reinstall:
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --no-cache-dir -r requirements.txt
+
+
+ERROR 2: Invalid ADK agent name
+
+Error:
+- `Found invalid agent name: adk-agent`
+
+Cause:
+- ADK internal `name` cannot contain hyphens.
+
+Wrong:
+
+name="adk-agent"
+
+Correct:
+
+name="adk_agent"
+
+
+ERROR 3: GOOGLE_API_KEY not available in server tab
+
+Symptom:
+- local server starts
+- summarize call returns 500
+- `echo $GOOGLE_API_KEY` prints nothing
+
+Fix:
+- set the variable in the same tab where the server runs
+
+Commands:
+
+source .venv/bin/activate
+export GOOGLE_API_KEY="YOUR_REAL_GEMINI_API_KEY"
+uvicorn main:app --host 0.0.0.0 --port 8080
+
+
+ERROR 4: Free-tier quota exhausted
+
+Error:
+- `429 RESOURCE_EXHAUSTED`
+- `generate_content_free_tier_requests`
+
+Cause:
+- project/key had no usable free-tier quota
+
+Fix options:
+1. use another project/key with quota
+2. wait for quota reset
+3. use a model available to that key
+
+
+ERROR 5: Model not found
+
+Error:
+- `models/gemini-1.5-flash is not found`
+
+Cause:
+- model name not supported by that key/API version
+
+Fix:
+- list models:
+
+curl "https://generativelanguage.googleapis.com/v1beta/models?key=$GOOGLE_API_KEY"
+
+- use an actually supported model
+
+Final working model:
+
+model="gemini-2.5-flash"
+
+
+ERROR 6: Cloud Build image name invalid
+
+Error:
+- `invalid image name ... YOUR_GCP_PROJECT_ID ...`
+
+Cause:
+- placeholder not replaced
+
+Wrong:
+
+export IMAGE_URI="us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/adk-agent-repo/adk-agent:latest"
+
+Correct:
+
+export PROJECT_ID="$(gcloud config get-value project)"
+export IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/adk-agent-repo/adk-agent:$(date +%Y%m%d-%H%M%S)"
+
+
+ERROR 7: Cloud Run deploy env var type conflict
+
+Error:
+- `Cannot update environment variable [GOOGLE_API_KEY] ... already been set with a different type`
+
+Cause:
+- old deployment used plain env var
+- new deployment used Secret Manager binding
+
+Fix:
+
+gcloud run services update adk-agent \
+  --region us-central1 \
+  --remove-env-vars GOOGLE_API_KEY
+
+Then deploy again with:
+
+--set-secrets GOOGLE_API_KEY=GOOGLE_API_KEY:latest
+
+
+ERROR 8: Wrong URL tested
+
+Symptom:
+- got Google HTML 404 page
+- route looked missing even though app was deployed
+
+Cause:
+- wrong URL or stale host was used
+
+Fix:
+- always fetch service URL directly:
+
+gcloud run services describe adk-agent \
+  --region us-central1 \
+  --format="value(status.url)"
+
+- then set:
+
+export APP_URL="$(gcloud run services describe adk-agent --region us-central1 --format='value(status.url)')"
+
+
+ERROR 9: Deployment looked stale
+
+Symptom:
+- code worked locally
+- Cloud Run still served old behavior
+
+Cause:
+- image tag reuse confusion
+
+Fix:
+- always deploy a fresh timestamped tag
+
+export IMAGE_URI="us-central1-docker.pkg.dev/${PROJECT_ID}/adk-agent-repo/adk-agent:$(date +%Y%m%d-%H%M%S)"
+
+
+ERROR 10: `/healthz` confusion
+
+What happened:
+- `/summarize` worked on deployed service
+- `/healthz` checks were confusing during URL testing
+
+Submission advice:
+- the assignment mainly requires a working public endpoint
+- your most important proof is a successful `/summarize` response
+
+====================================================================
+SECTION 11: FAILED OR MISLEADING COMMANDS TO AVOID
+====================================================================
+
+Avoid this internal agent name:
+
+name="adk-agent"
+
+Avoid unsupported model guesses:
+
+model="gemini-1.5-flash"
+
+Avoid placeholder image URI:
+
+export IMAGE_URI="us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/adk-agent-repo/adk-agent:latest"
+
+Avoid relying on `python main.py` if logs are unclear:
+
+python main.py
+
+Prefer:
+
+uvicorn main:app --host 0.0.0.0 --port 8080 --log-level debug
+
+Avoid reusing old `:latest` images if deployment seems stale.
+
+Avoid assuming `GOOGLE_API_KEY` is available in every Cloud Shell tab.
+Each tab is a separate shell session.
+
+====================================================================
+SECTION 12: FINAL SUBMISSION DATA
+====================================================================
+
+Project name:
+adk-agent
+
+Cloud Run service URL:
+Use:
+
+gcloud run services describe adk-agent \
+  --region us-central1 \
+  --format="value(status.url)"
+
+Working endpoint:
+POST `SERVICE_URL/summarize`
+
+Short description:
+adk-agent is a text summarization AI agent built using Google ADK and Gemini, containerized with Docker, stored in Artifact Registry, and deployed on Cloud Run with a public HTTP endpoint that returns structured JSON responses.
+
+====================================================================
+SECTION 13: FINAL CHECKLIST FOR REBUILDING IN ANOTHER ID
+====================================================================
+
+1. Create a new GCP project.
+2. Enable billing if required for your Gemini usage.
+3. Enable required APIs.
+4. Create the same files with the exact code above.
+5. Use `adk_agent` as the internal agent name.
+6. Use `gemini-2.5-flash` as the model.
+7. Use `pip install --no-cache-dir`.
+8. Set `GOOGLE_API_KEY` in the same tab where the server runs.
+9. Test locally with `/summarize`.
+10. Create Artifact Registry repository.
+11. Build with a fresh timestamp image tag.
+12. Store the key in Secret Manager.
+13. Grant Cloud Run access to the secret.
+14. Remove old plain env var if needed.
+15. Deploy with `--set-secrets`.
+16. Fetch the Cloud Run URL directly from `gcloud`.
+17. Test `/summarize`.
+
+If you follow this corrected version exactly, you should avoid the same mistakes we already discovered and fixed.

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.edge-pdf-profile/
+
+PROJECT_GUIDE.html
+PROJECT_GUIDE.pdf
+export_guide_pdf.ps1
